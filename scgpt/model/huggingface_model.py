@@ -12,8 +12,17 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.distributions import Bernoulli
 from tqdm import trange
 
-from flash_attn.flash_attention import FlashMHA
-from .flash_layers import FlashscGPTLayer, FlashscGPTGenerator
+try:
+    from flash_attn.flash_attention import FlashMHA
+    from .flash_layers import FlashscGPTLayer, FlashscGPTGenerator
+    FLASH_ATTN_AVAILABLE = True
+except ImportError:
+    import warnings
+    warnings.warn("flash_attn is not installed")
+    FLASH_ATTN_AVAILABLE = False
+    FlashMHA = None
+    FlashscGPTLayer = None
+    FlashscGPTGenerator = None
 
 
 from .dsbn import DomainSpecificBatchNorm1d
@@ -908,13 +917,23 @@ class FlashTransformerEncoderLayer(nn.Module):
     ) -> None:
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.self_attn = FlashMHA(
-            embed_dim=d_model,
-            num_heads=nhead,
-            batch_first=batch_first,
-            attention_dropout=dropout,
-            **factory_kwargs,
-        )
+        if FLASH_ATTN_AVAILABLE:
+            self.self_attn = FlashMHA(
+                embed_dim=d_model,
+                num_heads=nhead,
+                batch_first=batch_first,
+                attention_dropout=dropout,
+                **factory_kwargs,
+            )
+        else:
+            # Fallback to standard MultiheadAttention when flash_attn is not available
+            self.self_attn = nn.MultiheadAttention(
+                embed_dim=d_model,
+                num_heads=nhead,
+                batch_first=batch_first,
+                dropout=dropout,
+                **factory_kwargs,
+            )
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward, **factory_kwargs)
         self.dropout = nn.Dropout(dropout)
@@ -971,17 +990,27 @@ class FlashTransformerEncoderLayer(nn.Module):
             if src_key_padding_mask.dtype != torch.bool:
                 src_key_padding_mask = src_key_padding_mask.bool()
             # NOTE: the FlashMHA uses mask 0 for padding tokens, which is the opposite
-            src_key_padding_mask_ = ~src_key_padding_mask
+            if FLASH_ATTN_AVAILABLE:
+                src_key_padding_mask_ = ~src_key_padding_mask
+            else:
+                # Standard MultiheadAttention uses True for padding tokens
+                src_key_padding_mask_ = src_key_padding_mask
 
         if self.norm_scheme == "pre":
             src = self.norm1(src)
-            src2 = self.self_attn(src, key_padding_mask=src_key_padding_mask_)[0]
+            if FLASH_ATTN_AVAILABLE:
+                src2 = self.self_attn(src, key_padding_mask=src_key_padding_mask_)[0]
+            else:
+                src2 = self.self_attn(src, src, src, key_padding_mask=src_key_padding_mask_)[0]
             src = src + self.dropout1(src2)
             src = self.norm2(src)
             src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
             src = src + self.dropout2(src2)
         else:
-            src2 = self.self_attn(src, key_padding_mask=src_key_padding_mask_)[0]
+            if FLASH_ATTN_AVAILABLE:
+                src2 = self.self_attn(src, key_padding_mask=src_key_padding_mask_)[0]
+            else:
+                src2 = self.self_attn(src, src, src, key_padding_mask=src_key_padding_mask_)[0]
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
