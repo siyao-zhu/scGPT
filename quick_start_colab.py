@@ -63,9 +63,9 @@ def setup_scgpt_colab():
     run_command("apt-get update", "Updating package list")
     run_command("apt-get install -y git wget curl", "Installing basic tools")
     
-    # Step 2: Install PyTorch with CUDA support
+    # Step 2: Install PyTorch with CUDA support (updated versions)
     print("\n🐍 Installing PyTorch...")
-    run_command("pip install torch==1.13.0 torchvision==0.14.0 torchaudio==0.13.0 --index-url https://download.pytorch.org/whl/cu116", 
+    run_command("pip install torch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 --index-url https://download.pytorch.org/whl/cu116", 
                 "Installing PyTorch with CUDA 11.6")
     
     # Step 3: Install Python dependencies
@@ -75,7 +75,7 @@ def setup_scgpt_colab():
         "scvi-tools==0.16.0",
         "llvmlite==0.38.0",
         "scanpy==1.9.1",
-        "torchtext==0.14.0",
+        "torchtext==0.14.1",
         "transformers==4.18.0",
         "numba==0.55.1",
         "scikit-misc==0.1.4",
