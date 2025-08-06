@@ -33,7 +33,7 @@ Run the following cells in your Colab notebook:
 
 ### Cell 3: Install PyTorch
 ```python
-!pip install torch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 --index-url https://download.pytorch.org/whl/cu116
+!pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
 ### Cell 4: Install Python Dependencies
@@ -43,7 +43,7 @@ dependencies = [
     "scvi-tools==0.16.0",
     "llvmlite==0.38.0",
     "scanpy==1.9.1",
-    "torchtext==0.14.1",
+    "torchtext",
     "transformers==4.18.0",
     "numba==0.55.1",
     "scikit-misc==0.1.4",
