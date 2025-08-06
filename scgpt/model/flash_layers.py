@@ -9,10 +9,21 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.modules.transformer import _get_clones
 
-from flash_attn.flash_attn_interface import flash_attn_unpadded_qkvpacked_func
-from flash_attn.bert_padding import unpad_input, pad_input
-from flash_attn.flash_attention import FlashAttention
-from flash_attn.modules.mha import FlashCrossAttention
+try:
+    from flash_attn.flash_attn_interface import flash_attn_unpadded_qkvpacked_func
+    from flash_attn.bert_padding import unpad_input, pad_input
+    from flash_attn.flash_attention import FlashAttention
+    from flash_attn.modules.mha import FlashCrossAttention
+    FLASH_ATTN_AVAILABLE = True
+except ImportError:
+    import warnings
+    warnings.warn("flash_attn is not installed")
+    FLASH_ATTN_AVAILABLE = False
+    flash_attn_unpadded_qkvpacked_func = None
+    unpad_input = None
+    pad_input = None
+    FlashAttention = None
+    FlashCrossAttention = None
 from .layers import MultiheadAttention
 
 
@@ -49,7 +60,17 @@ class FlashscGPTMHA(nn.Module):
         ), "Only support head_dim <= 128 and divisible by 8"
 
         self.Wqkv = nn.Linear(embed_dim, 3 * embed_dim, bias=bias, **factory_kwargs)
-        self.self_attn = FlashAttention(attention_dropout=attention_dropout)
+        if FLASH_ATTN_AVAILABLE:
+            self.self_attn = FlashAttention(attention_dropout=attention_dropout)
+        else:
+            # Fallback to standard MultiheadAttention when flash_attn is not available
+            self.self_attn = MultiheadAttention(
+                embed_dim,
+                num_heads,
+                dropout=attention_dropout,
+                batch_first=batch_first,
+                **factory_kwargs,
+            )
         self.cross_attn = MultiheadAttention(
             embed_dim,
             num_heads,
@@ -86,13 +107,31 @@ class FlashscGPTMHA(nn.Module):
         )
 
         # full self attention on pcpt genes
-        pcpt_context, pcpt_attn_weights = self.self_attn(
-            pcpt_qkv,
-            key_padding_mask=pcpt_key_padding_mask,
-            need_weights=need_weights,
-            causal=self.causal,
-        )
-        pcpt_context = self.out_proj(rearrange(pcpt_context, "b s h d -> b s (h d)"))
+        if FLASH_ATTN_AVAILABLE:
+            pcpt_context, pcpt_attn_weights = self.self_attn(
+                pcpt_qkv,
+                key_padding_mask=pcpt_key_padding_mask,
+                need_weights=need_weights,
+                causal=self.causal,
+            )
+        else:
+            # For standard MultiheadAttention, we need to reshape and call differently
+            pcpt_q = pcpt_qkv[:, :, 0, :, :]  # (batch, pcpt_len, nheads, head_dim)
+            pcpt_k = pcpt_qkv[:, :, 1, :, :]  # (batch, pcpt_len, nheads, head_dim)
+            pcpt_v = pcpt_qkv[:, :, 2, :, :]  # (batch, pcpt_len, nheads, head_dim)
+            pcpt_q = rearrange(pcpt_q, "b s h d -> b s (h d)")
+            pcpt_k = rearrange(pcpt_k, "b s h d -> b s (h d)")
+            pcpt_v = rearrange(pcpt_v, "b s h d -> b s (h d)")
+            pcpt_context, pcpt_attn_weights = self.self_attn(
+                pcpt_q, pcpt_k, pcpt_v,
+                key_padding_mask=pcpt_key_padding_mask,
+                need_weights=need_weights,
+            )
+        if FLASH_ATTN_AVAILABLE:
+            pcpt_context = self.out_proj(rearrange(pcpt_context, "b s h d -> b s (h d)"))
+        else:
+            # For standard MultiheadAttention, the output is already in the right shape
+            pcpt_context = self.out_proj(pcpt_context)
 
         if gen_total_embs is None:
             return (pcpt_context, None), (pcpt_attn_weights, None)
